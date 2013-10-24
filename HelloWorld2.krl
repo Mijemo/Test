@@ -1,28 +1,232 @@
-ruleset HelloWorldApp {
+ruleset LightCont {
   meta {
-    name "Hello World"
+    name "Light Controller"
     description <<
-      Hello World
-    >>
-    author ""
-    logging off
+An app for interacting with the Hue service to control Hue lights.
+>>
+    author "Phil Windley"
+    logging on
+    use module a16x165 alias hue
+    use module a169x676 alias pds
     use module a169x701 alias CloudRain
-    use module a41x186  alias SquareTag
+    use module a169x664 alias CloudUI
+
+   use javascript resource "https://raw.github.com/DavidDurman/FlexiColorPicker/master/colorpicker.min.js"
+   use javascript resource jquery_ui_js
   }
+
   dispatch {
   }
+
   global {
+
+    myDivID ="hue-#{meta:rid()}";
+    myDivIDSelector ="##{myDivID}";
+    initial_fields = <<
+<div style="margin: 20px" id="#{myDivID}" ></div>
+<div id="alertForgot" class="alert alert-info" style="display:none;"></div>
+<div style="margin: 20px">
+<form class="form-horizontal" id="formHue">
+  <fieldset>
+   <h4>Hue Lights</h4>
+   <div class="control-group"> 
+    <label class="control-label" for="bulb">Light</label>
+    <div class="controls">
+    <label class="radio inline">
+      <input type="radio" name="bulb" value="1"> 1
+      <div id="tester"></div>
+    </label>
+    <label class="radio inline">
+      <input type="radio" name="bulb"  value="2"> 2
+    </label>
+    <label class="radio inline">
+      <input type="radio" name="bulb"  value="3"> 3
+    </label>
+    <label class="radio inline">
+      <input type="radio" name="bulb"  value="4"> 4
+    </label>
+    </div>
+   </div>
+
+   <div class="control-group">
+    <label class="control-label" for="hue">Hue (0..360)</label>
+    <div class="controls">
+      <input class="input-mini" type="text" name="hue" id="hue" placeholder="0">
+    </div>
+  </div>
+
+  <div class="control-group">
+    <label class="control-label" for="sat">Saturation (0..1)</label>
+    <div class="controls">
+      <input class="input-mini" type="text" name="sat" id="sat" value="1.0">
+    </div>
+  </div>
+
+  <div class="control-group">
+    <label class="control-label" for="li">Lightness (0..1)</label>
+    <div class="controls">
+      <input class="input-mini" type="text" name="li" id="li" value="0.5">
+    </div>
+  </div>
+  <div class="control-group">
+    <div class="controls">
+      <button type="submit" class="btn btn-primary">Go</button>
+    </div>
+  </div>
+  <div class="control-group">
+   <h4>All Lights</h4>
+    <div class="controls"> 
+     <a href="#!/app/#{meta:rid()}/all_on" class="btn btn-success">All On</a>
+     <a href="#!/app/#{meta:rid()}/all_off" class="btn btn-danger">All Off</a> 
+    </div>
+  </div>
+ </fieldset>
+</form>
+</div>
+>>;
   }
-  rule HelloWorld is active {
-    select when web cloudAppSelected
+
+
+
+  rule turn_one_on {
+    select when office door_open
+    always {
+      raise explicit event office_lights
+        with state = "on";
+      raise explicit event office_heater
+        with state = "on";
+    }
+  }
+
+  rule turn_one_off {
+    select when office door_closed
+    always {
+      raise explicit event office_lights
+        with state = "off";
+      raise explicit event office_heater
+        with state = "off";
+    }
+  }
+
+
+
+  rule set_temp_color {
+    select when thermostat temperature
     pre {
-      my_html = <<
-        <h5>Hello, world!</h5>
-      >>;
+      trend =  pds:get_item('thermostat','last_temp_trend');
+      hue = trend eq 'red'   => 8 |
+            trend eq 'green' => 240 |
+                                55;
+
+    }
+    hue:set_bulb_hsl(1, hue, 1.0, 0.50);
+  }
+
+
+  // ------------------------------------------------------------------------
+  // for dashboard interaction
+  // ------------------------------------------------------------------------
+  rule appHue_Selected {
+    select when web cloudAppSelected
+           or   web cloudAppAction
+    pre {
+      appMenu = [];
+    }
+    CloudRain:createPanel("Light Controller", appMenu);
+  }
+
+  // ------------------------------------------------------------------------
+  rule appHue_Created {
+    select when web cloudAppSelected
+           or   web cloudAppAction action re/first/
+    pre {
+      appContent = <<
+#{initial_fields}
+>>;
     }
     {
-      SquareTag:inject_styling();
-      CloudRain:createLoadPanel("Hello World!", {}, my_html);
+      CloudRain:loadPanel(appContent);
+      CloudRain:skyWatchSubmit("#formHue", meta:eci());
+      emit << $K("#slider").slider() >>;
     }
   }
+
+  rule appHue_allOn {
+    select when web cloudAppAction action re/all_on/
+    pre {
+      appContent = <<
+Light are all on.
+>>;
+    }
+    {
+      CloudUI:showAlert("#alertForgot", appContent);
+      CloudRain:hideSpinner();
+    }
+    always {
+      raise explicit event office_lights
+        with state = "on"
+    }
+
+  }
+  
+  rule appHue_allOff {
+    select when web cloudAppAction action re/all_off/
+    pre {
+      appContent = <<
+Lights are all off.
+>>;
+    }
+    {
+      CloudUI:showAlert("#alertForgot", appContent);
+      CloudRain:hideSpinner();
+    }
+    always {
+      raise explicit event office_lights
+        with state = "off"
+    }
+
+  }
+  
+
+  rule appHue_form_submit {
+    select when web submit "#formHue"
+    pre {
+  //      action = event:attrs().encode();
+ //       appContent = <<
+ // Attrs: #{action}
+ // >>;
+      appContent = <<
+Updated bulb #{event:attr("bulb")} with HSL=(#{event:attr("hue")}, #{event:attr("sat")}, #{event:attr("li")}) 
+>>;
+    }
+    {
+//      replace_inner(myDivIDSelector, appContent);
+      CloudRain:hideSpinner();
+      CloudUI:showAlert("#alertForgot", appContent);
+      hue:set_bulb_hsl(event:attr("bulb"), event:attr("hue"), event:attr("sat"), event:attr("li") );
+    }
+  }
+
+  rule notify_light_status {
+    select when explicit office_lights
+
+
+    pre {
+      state = event:attr("state");
+      msg = <<
+The office lights have been turned #{state}
+>>
+    }
+
+    noop();
+
+    always {
+      raise notification event status with
+        priority = 2 and         
+        application = meta:rulesetName() and
+        subject = "Office Lights" and
+        description = msg
+    }
+  }
+
 }
