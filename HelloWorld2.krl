@@ -21,10 +21,8 @@ ruleset HelloWorldApp {
       >>;
     }
     {
-    
-      notify("Header","Test");
       SquareTag:inject_styling();
       CloudRain:createLoadPanel("Hello World!", {}, my_html);
     }
   }
-  }
+}
